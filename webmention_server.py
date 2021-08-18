@@ -156,6 +156,29 @@ class LinkFinder(HTMLParser):
 
 
 class WebmentionHandler(http.server.SimpleHTTPRequestHandler):
+    def do_HEAD(self, *args, **kwargs):
+        path = self.path.lstrip("/")
+        target = None
+        body = ""
+        for s in self.server.config["sources"]:
+            if path == s["source"]:
+                target = s["target"]
+        if not target:
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain;charset=utf-8")
+            body = "Not found."
+            self.send_header("Content-Length", str(len(body)))
+        else:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            body = f"""<!DOCTYPE html><html lang=en><head><meta charset=utf-8><title>{target}</title></head><body><a href="{target}">target</a>"""
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Link",
+                f"<http://{self.server.server_address[0]}:{self.server.server_address[1]}>; rel=webmention",
+            )
+        self.end_headers()
+
     def do_GET(self, *args, **kwargs):
         path = self.path.lstrip("/")
         target = None
