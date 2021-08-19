@@ -15,10 +15,37 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+"""
+Typical usage:
+
+    webmention_server.py --port 8000 --accept-all # serve endpoint
+    webmention_server.py --port 8000 --sources sources.json  # serve endpoint with specified sources
+    webmention_server.py --port 8000 --sources sources.json --send-to 127.0.0.1:8001 # send Webmentions to other server and then serve endpoint with specified sources
+    webmention_server.py run_discovery_tests # run discovery tests from https://webmention.rocks/
+    webmention_server.py run_discovery_tests --urls "URL1" "URL2" ... # run discovery tests with your own URLs
+    webmention_server.py --help # show the following:
+
+usage: webmention_server.py [-h] [--port PORT] [--accept-all] [--sources SOURCES] [--send-to SEND_TO] {run_discovery_tests} ...
+
+Host dummy webmention server for testing.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --port PORT           default port: 8000
+  --accept-all          accept all targets.
+  --sources SOURCES     JSON file with sources. Must be an array of dictionarys with two keys: source and target. Example: [ { "source":"", "target":"http://super.cool.domain.tld/post-about-something/" }, { "source":"bookmarks",
+                        "target":"http://super.cool.domain.tld/post-about-something-else/" } ] This will serve two pages containing only the target links in order to allow verification of webmentions: The root page: "/" and "/bookmarks"
+  --send-to SEND_TO     send webmentions to address before starting server, with targets from sources argument.
+
+subcommands:
+  {run_discovery_tests}
+"""
 import sys
 import re
 import argparse
 import json
+import time
 import http.server
 import urllib.request
 import urllib.parse
@@ -89,7 +116,9 @@ def webmention_discovery(url):
             link_header = response.getheader("Link")
             if link_header is not None:
                 for link in parse_header_links(link_header):
-                    if "rel" in link and link["rel"] == "webmention":
+                    if "rel" in link and any(
+                        v == "webmention" for v in link["rel"].split()
+                    ):
                         print("found ", link["url"])
                         links.add(link["url"])
             body = response.read().decode("utf-8")
@@ -102,12 +131,58 @@ def webmention_discovery(url):
     req = urllib.request.Request(url, method="HEAD")
     links |= check_link_header(req)[0]
     if len(links) == 0:
+        print("performing GET request...")
         req = urllib.request.Request(url, method="GET")
         (get_links, response) = check_link_header(req)
         links |= get_links
         if len(links) == 0:
             links |= LinkFinder.extract(response)["webmention_links"]
     return [to_absolute(root, l) for l in links]
+
+
+def run_discovery_tests(urls=None):
+    if urls is None:
+        urls = [
+            "https://webmention.rocks/test/1",
+            "https://webmention.rocks/test/2",
+            "https://webmention.rocks/test/3",
+            "https://webmention.rocks/test/4",
+            "https://webmention.rocks/test/5",
+            "https://webmention.rocks/test/6",
+            "https://webmention.rocks/test/7",
+            "https://webmention.rocks/test/8",
+            "https://webmention.rocks/test/9",
+            "https://webmention.rocks/test/10",
+            "https://webmention.rocks/test/11",
+            "https://webmention.rocks/test/12",
+            "https://webmention.rocks/test/13",
+            "https://webmention.rocks/test/14",
+            "https://webmention.rocks/test/15",
+            "https://webmention.rocks/test/16",
+            "https://webmention.rocks/test/17",
+            "https://webmention.rocks/test/18",
+            "https://webmention.rocks/test/19",
+            "https://webmention.rocks/test/20",
+            "https://webmention.rocks/test/21",
+            "https://webmention.rocks/test/22",
+            "https://webmention.rocks/test/23/page",
+        ]
+    failed = []
+    results = []
+    for url in urls:
+        print("\nChecking url ", url)
+        result = webmention_discovery(url)
+        results.append((url, results))
+        if not result:
+            failed.append(url)
+        print("Discovered: ", result)
+        print("Sleeping for 2 seconds...")
+        time.sleep(2)
+    print("\nResults: ")
+    for (url, links) in results:
+        print(url, links)
+    if failed:
+        print("\nDiscovery failed with the following URLs:", failed)
 
 
 class LinkFinder(HTMLParser):
@@ -131,7 +206,7 @@ class LinkFinder(HTMLParser):
         if tag not in ["a", "link"]:
             return
         attrs = {a[0]: a[1] for a in attrs}
-        if "rel" in attrs and attrs["rel"] == "webmention":
+        if "rel" in attrs and any(v == "webmention" for v in attrs["rel"].split()):
             if "href" in attrs:
                 print("found", attrs["href"])
                 self.webmention_links.add(attrs["href"])
@@ -237,7 +312,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Host dummy webmention server for testing."
     )
-    parser.add_argument("PORT", type=int, default=8000, help="default port: 8000")
+    subparsers = parser.add_subparsers(title="subcommands", dest="subcommands", help="")
+    discovery_tests = subparsers.add_parser("run_discovery_tests")
+    discovery_tests.add_argument("--urls", nargs="*", required=False)
+
+    parser.add_argument("--port", type=int, default=8000, help="default port: 8000")
     parser.add_argument(
         "--accept-all", action="store_true", default=True, help="accept all targets."
     )
@@ -267,6 +346,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     print("Arguments:", args)
+    if args.subcommands == "run_discovery_tests":
+        run_discovery_tests(args.urls)
+        sys.exit(0)
     if args.sources:
         with open(args.sources, "r") as s:
             sources = json.loads(s.read())
@@ -283,7 +365,7 @@ if __name__ == "__main__":
         "accept_all": args.accept_all,
     }
 
-    with WebmentionServer(config, ("", args.PORT), handler) as httpd:
+    with WebmentionServer(config, ("", args.port), handler) as httpd:
         if args.send_to:
             print(f"sending webmentions to {args.send_to}.")
             for s in config["sources"]:
@@ -296,6 +378,6 @@ if __name__ == "__main__":
                 if result:
                     print(f" * {args.send_to} returned: {result}")
 
-        print("serving at port", args.PORT)
+        print("serving at port", args.port)
         httpd.allow_reuse_address = True
         httpd.serve_forever()
